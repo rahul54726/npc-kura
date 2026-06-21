@@ -1,9 +1,8 @@
 pipeline{
     agent any
     environment{
-    APP_NAME = "npc-kura"
-    DOCKER_IMAGE = "npc-kura-app:${env.BUILD_NUMBER}"
-
+        APP_NAME = "npc-kura"
+        DOCKER_IMAGE = "npc-kura-app:${env.BUILD_NUMBER}"
     }
     stages{
         stage('Checkout Source Code'){
@@ -23,8 +22,19 @@ pipeline{
             steps {
                 echo 'Building Docker Image from Dockerfile...'
                 sh "docker build -t ${DOCKER_IMAGE} ."
-                }
             }
+        }
+        
+        stage('Deploy to Server (Docker)') {
+            steps {
+                echo 'Deploying the application...'
+                sh '''
+                    docker stop npc-kura-container || true
+                    docker rm npc-kura-container || true
+                '''
+                sh "docker run -d -p 8081:8081 --name npc-kura-container ${DOCKER_IMAGE}"
+            }
+        }
     }
 
     post{
@@ -35,8 +45,8 @@ pipeline{
             echo 'PipeLine failed check logs.'
         }
         always{
-        echo 'cleaning up workSpace...'
-        cleanWs()
+            echo 'cleaning up workSpace...'
+            cleanWs()
         }
     }
 }
