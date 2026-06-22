@@ -52,3 +52,4 @@ Thumbs.db
 application-secret.properties
 .env
 src/main/resources/application.yml
+my-aws-key.pem

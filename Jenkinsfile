@@ -8,7 +8,7 @@ pipeline {
         DOCKER_IMAGE = "${DOCKER_HUB_USER}/npc-kura-app:latest"
 
         // AWS EC2 configuration
-        EC2_IP = "13.233.36.233"
+        EC2_IP = "65.2.149.188"
         EC2_USER = "ubuntu"
     }
 
