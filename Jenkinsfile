@@ -7,6 +7,7 @@ pipeline {
         DOCKER_IMAGE = "${DOCKER_HUB_USER}/npc-kura-app:latest"
         EC2_IP = "65.2.149.188"
         EC2_USER = "ubuntu"
+        REMOTE_DIR = "/home/ubuntu/npc-kura-deploy"
     }
 
     stages {
@@ -14,22 +15,6 @@ pipeline {
             steps {
                 echo 'Pulling latest code from the Git branch...'
                 checkout scm
-            }
-        }
-
-        stage('Verify Docker') {
-            steps {
-                echo 'Checking that Docker CLI and daemon are available...'
-                sh '''
-                    if ! command -v docker >/dev/null 2>&1; then
-                        echo "ERROR: docker CLI not found on this Jenkins agent."
-                        echo "Rebuild Jenkins using Dockerfile.jenkins and mount the host socket:"
-                        echo "  docker compose -f docker-compose.jenkins.yml up -d --build"
-                        exit 1
-                    fi
-                    docker version
-                    docker info
-                '''
             }
         }
 
@@ -41,36 +26,41 @@ pipeline {
             }
         }
 
-        stage('Build Docker Image') {
+        stage('Deploy to AWS EC2') {
             steps {
-                echo 'Building Docker Image from Dockerfile...'
-                sh 'docker build -t ${DOCKER_IMAGE} .'
+                echo 'Copying JAR to EC2 and building/running the container there (Docker runs on EC2, not Jenkins)...'
+                sshagent(['ec2-ssh-key']) {
+                    sh """
+                        set -e
+                        JAR_FILE=\$(ls target/kura-*.jar | head -1)
+                        SSH_OPTS="-o StrictHostKeyChecking=no"
+
+                        ssh \$SSH_OPTS ${EC2_USER}@${EC2_IP} "mkdir -p ${REMOTE_DIR}"
+                        cat "\$JAR_FILE" | ssh \$SSH_OPTS ${EC2_USER}@${EC2_IP} "cat > ${REMOTE_DIR}/app.jar"
+                        cat Dockerfile.runtime | ssh \$SSH_OPTS ${EC2_USER}@${EC2_IP} "cat > ${REMOTE_DIR}/Dockerfile"
+
+                        ssh \$SSH_OPTS ${EC2_USER}@${EC2_IP} "
+                            cd ${REMOTE_DIR} &&
+                            sudo docker build -t ${DOCKER_IMAGE} . &&
+                            sudo docker stop npc-kura-container || true &&
+                            sudo docker rm npc-kura-container || true &&
+                            sudo docker run -d -p 8081:8081 --name npc-kura-container ${DOCKER_IMAGE}
+                        "
+                    """
+                }
             }
         }
 
         stage('Push to Docker Hub') {
             steps {
-                echo 'Logging into Docker Hub and pushing the image...'
-                withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', passwordVariable: 'DOCKER_PASS', usernameVariable: 'DOCKER_USER')]) {
-                    sh 'echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin'
-                    sh 'docker push ${DOCKER_IMAGE}'
-                }
-            }
-        }
-
-        stage('Deploy to AWS EC2') {
-            steps {
-                echo 'Connecting to EC2 via SSH and deploying the new container...'
+                echo 'Pushing image to Docker Hub from EC2...'
                 withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', passwordVariable: 'DOCKER_PASS', usernameVariable: 'DOCKER_USER')]) {
                     sshagent(['ec2-ssh-key']) {
                         sh """
-                        ssh -o StrictHostKeyChecking=no ${EC2_USER}@${EC2_IP} "
-                            echo '${DOCKER_PASS}' | sudo docker login -u '${DOCKER_USER}' --password-stdin &&
-                            sudo docker pull ${DOCKER_IMAGE} &&
-                            sudo docker stop npc-kura-container || true &&
-                            sudo docker rm npc-kura-container || true &&
-                            sudo docker run -d -p 8081:8081 --name npc-kura-container ${DOCKER_IMAGE}
-                        "
+                            ssh -o StrictHostKeyChecking=no ${EC2_USER}@${EC2_IP} "
+                                echo '${DOCKER_PASS}' | sudo docker login -u '${DOCKER_USER}' --password-stdin &&
+                                sudo docker push ${DOCKER_IMAGE}
+                            "
                         """
                     }
                 }
