@@ -11,11 +11,31 @@ pipeline {
         EC2_IP = "65.2.149.188"
         EC2_USER = "ubuntu"
 
-        // Absolute path to the Docker executable to resolve 'command not found' path issues in Jenkins
-        DOCKER_CMD = "/usr/bin/docker"
+        // Custom persistent path for Docker CLI to survive container restarts
+        DOCKER_CMD = "/var/jenkins_home/docker-cli/docker"
     }
 
     stages {
+        stage('Initialize Docker CLI (Auto-Heal)') {
+            steps {
+                echo 'Ensuring Docker CLI is permanently available in the Jenkins persistent volume...'
+                sh '''
+                if [ ! -f "${DOCKER_CMD}" ]; then
+                    echo "Docker CLI not found. Downloading static binary..."
+                    mkdir -p /var/jenkins_home/docker-cli
+                    curl -fsSLO https://download.docker.com/linux/static/stable/x86_64/docker-26.0.1.tgz
+                    tar -xzf docker-26.0.1.tgz
+                    mv docker/docker ${DOCKER_CMD}
+                    chmod +x ${DOCKER_CMD}
+                    rm -rf docker docker-26.0.1.tgz
+                else
+                    echo "Docker CLI is already installed at ${DOCKER_CMD}."
+                fi
+                ${DOCKER_CMD} --version
+                '''
+            }
+        }
+
         stage('Checkout Source Code') {
             steps {
                 echo 'Pulling latest code from the Git branch...'
@@ -36,7 +56,7 @@ pipeline {
         stage('Build Docker Image') {
             steps {
                 echo 'Building Docker Image from Dockerfile...'
-                // Use the absolute path for the Docker command to bypass environment variable constraints
+                // Use the persistent Docker CLI path
                 sh "${DOCKER_CMD} build -t ${DOCKER_IMAGE} ."
             }
         }
