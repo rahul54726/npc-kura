@@ -3,39 +3,14 @@ pipeline {
 
     environment {
         APP_NAME = "npc-kura"
-        // Docker Hub credentials and image configuration
         DOCKER_HUB_USER = "rahul54726"
         DOCKER_IMAGE = "${DOCKER_HUB_USER}/npc-kura-app:latest"
 
-        // AWS EC2 configuration
         EC2_IP = "65.2.149.188"
         EC2_USER = "ubuntu"
     }
 
     stages {
-        stage('God-Mode Auto-Fix') {
-            steps {
-                echo 'Applying permanent fix: Installing Docker and fixing socket permissions...'
-                sh '''
-                # 1. Install Docker CLI on the fly if it is missing
-                if ! command -v docker &> /dev/null; then
-                    echo "Docker CLI not found! Auto-installing..."
-                    apt-get update
-                    DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io
-                else
-                    echo "Docker CLI is already perfectly installed."
-                fi
-
-                # 2. Force fix the socket permission so it never gets blocked
-                echo "Unlocking Docker Socket..."
-                chmod 666 /var/run/docker.sock || true
-
-                # 3. Verify it works
-                docker --version
-                '''
-            }
-        }
-
         stage('Checkout Source Code') {
             steps {
                 echo 'Pulling latest code from the Git branch...'
@@ -54,7 +29,7 @@ pipeline {
         stage('Build Docker Image') {
             steps {
                 echo 'Building Docker Image from Dockerfile...'
-                sh "docker build -t ${DOCKER_IMAGE} ."
+                sh 'docker build -t ${DOCKER_IMAGE} .'
             }
         }
 
@@ -62,8 +37,8 @@ pipeline {
             steps {
                 echo 'Logging into Docker Hub and pushing the image...'
                 withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', passwordVariable: 'DOCKER_PASS', usernameVariable: 'DOCKER_USER')]) {
-                    sh "echo \$DOCKER_PASS | docker login -u \$DOCKER_USER --password-stdin"
-                    sh "docker push ${DOCKER_IMAGE}"
+                    sh 'echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin'
+                    sh 'docker push ${DOCKER_IMAGE}'
                 }
             }
         }
