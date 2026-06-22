@@ -1,5 +1,5 @@
 pipeline {
-    agent none
+    agent any
 
     environment {
         APP_NAME = "npc-kura"
@@ -7,20 +7,33 @@ pipeline {
         DOCKER_IMAGE = "${DOCKER_HUB_USER}/npc-kura-app:latest"
         EC2_IP = "65.2.149.188"
         EC2_USER = "ubuntu"
-        DOCKER_SOCKET = '/var/run/docker.sock'
     }
 
     stages {
         stage('Checkout Source Code') {
-            agent any
             steps {
                 echo 'Pulling latest code from the Git branch...'
                 checkout scm
             }
         }
 
+        stage('Verify Docker') {
+            steps {
+                echo 'Checking that Docker CLI and daemon are available...'
+                sh '''
+                    if ! command -v docker >/dev/null 2>&1; then
+                        echo "ERROR: docker CLI not found on this Jenkins agent."
+                        echo "Rebuild Jenkins using Dockerfile.jenkins and mount the host socket:"
+                        echo "  docker compose -f docker-compose.jenkins.yml up -d --build"
+                        exit 1
+                    fi
+                    docker version
+                    docker info
+                '''
+            }
+        }
+
         stage('Build Java Application') {
-            agent any
             steps {
                 echo 'Building Spring Boot JAR using Maven Wrapper...'
                 sh 'chmod +x mvnw'
@@ -29,13 +42,6 @@ pipeline {
         }
 
         stage('Build Docker Image') {
-            agent {
-                docker {
-                    image 'docker:24-cli'
-                    reuseNode true
-                    args "-v ${DOCKER_SOCKET}:/var/run/docker.sock"
-                }
-            }
             steps {
                 echo 'Building Docker Image from Dockerfile...'
                 sh 'docker build -t ${DOCKER_IMAGE} .'
@@ -43,13 +49,6 @@ pipeline {
         }
 
         stage('Push to Docker Hub') {
-            agent {
-                docker {
-                    image 'docker:24-cli'
-                    reuseNode true
-                    args "-v ${DOCKER_SOCKET}:/var/run/docker.sock"
-                }
-            }
             steps {
                 echo 'Logging into Docker Hub and pushing the image...'
                 withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', passwordVariable: 'DOCKER_PASS', usernameVariable: 'DOCKER_USER')]) {
@@ -60,7 +59,6 @@ pipeline {
         }
 
         stage('Deploy to AWS EC2') {
-            agent any
             steps {
                 echo 'Connecting to EC2 via SSH and deploying the new container...'
                 withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', passwordVariable: 'DOCKER_PASS', usernameVariable: 'DOCKER_USER')]) {
@@ -89,9 +87,7 @@ pipeline {
         }
         always {
             echo 'Cleaning up the Jenkins workspace to free up disk space...'
-            node('') {
-                cleanWs()
-            }
+            cleanWs()
         }
     }
 }

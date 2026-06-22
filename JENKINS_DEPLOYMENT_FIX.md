@@ -2,37 +2,50 @@
 
 ## What was failing
 
-The pipeline failed at **Build Docker Image** with:
+### Error 1 — `docker: not found`
+
+The pipeline failed at **Build Docker Image**:
 
 ```text
 docker: not found
 ERROR: script returned exit code 127
 ```
 
-Maven (`./mvnw clean package`) succeeded. Jenkins could not run `docker build` because the Jenkins agent had **no Docker CLI** and **no access to a Docker daemon**.
+Maven built successfully. Jenkins could not run `docker build` because the Jenkins container had **no Docker CLI** and **no access to the host Docker daemon**.
 
-The `post` block also ran `docker logout`, which failed for the same reason.
+### Error 2 — `Invalid agent type "docker"`
+
+After an earlier fix attempt, the pipeline failed at startup:
+
+```text
+Invalid agent type "docker" specified. Must be one of [any, label, none]
+```
+
+That happens when the **Docker Pipeline** plugin is not installed. The current `Jenkinsfile` does **not** use `agent { docker { ... } }` — it uses plain `sh 'docker ...'` commands with `agent any`, so no extra plugin is needed for Docker.
 
 ## Root cause
 
-Jenkins runs inside a container (`/var/jenkins_home/...`). That container did not include Docker, and the host Docker socket was not mounted. Without both, `docker` commands cannot work.
+Jenkins runs inside a container (`/var/jenkins_home/...`). That container:
+
+1. Did not include the Docker CLI
+2. Did not mount the host Docker socket (`/var/run/docker.sock`)
+
+Without both, `docker` commands cannot work.
 
 ## What we changed
 
-### 1. `Jenkinsfile` — run Docker steps in a Docker-capable agent
+### 1. `Jenkinsfile` — standard agents only, shell Docker commands
 
 | Change | Why |
 |--------|-----|
-| Docker build/push stages use `agent { docker { image 'docker:24-cli' ... } }` | Provides the Docker CLI without installing packages during the pipeline |
-| Mount `/var/run/docker.sock` into that agent | Lets the CLI talk to the host Docker daemon |
-| `reuseNode true` | Reuses the same workspace so the built JAR and source are available |
-| `withCredentials` on **Deploy to AWS EC2** | Docker Hub username/password were only available in the push stage before; EC2 deploy could not log in to pull the image |
-| Removed `docker logout` from `post` | Avoids another `docker: not found` failure on the main agent |
-| `agent none` at pipeline level | Allows different stages to use different agents |
+| `agent any` for the whole pipeline | Works without the Docker Pipeline plugin |
+| New **Verify Docker** stage | Fails fast with a clear message if Docker is not set up |
+| `withCredentials` on **Deploy to AWS EC2** | Docker Hub credentials were missing in the deploy stage |
+| Removed `docker logout` from `post` | Avoided another `docker: not found` on failure cleanup |
 
-### 2. `Dockerfile.jenkins` — optional custom Jenkins image
+### 2. `Dockerfile.jenkins` — custom Jenkins image with Docker CLI
 
-Installs `docker.io` and adds the `jenkins` user to the `docker` group so Docker works on the main agent if you prefer not to use the `docker:24-cli` sidecar pattern.
+Installs `docker.io` and adds the `jenkins` user to the `docker` group.
 
 ### 3. `docker-compose.jenkins.yml` — correct Jenkins runtime
 
@@ -43,17 +56,18 @@ Starts Jenkins with:
 
 ## One-time Jenkins server setup
 
-Do this on the machine that runs Jenkins (your EC2 Jenkins host or local Docker host).
+Do this on the machine that runs Jenkins.
 
 ### Required Jenkins plugins
 
 In **Manage Jenkins → Plugins**, install:
 
-- **Docker Pipeline**
-- **SSH Agent**
-- **Credentials Binding**
+- **SSH Agent** (for EC2 deploy)
+- **Credentials Binding** (for Docker Hub login)
 
-Restart Jenkins after installing.
+**Docker Pipeline is NOT required** for the current `Jenkinsfile`.
+
+Restart Jenkins after installing plugins.
 
 ### Required Jenkins credentials
 
@@ -66,48 +80,57 @@ In **Manage Jenkins → Credentials**, create:
 
 ### Start or restart Jenkins with Docker socket access
 
+This step fixes `docker: not found`. Run it on the **Jenkins host** (SSH into the server where Jenkins runs).
+
 **Option A — docker compose (recommended)**
 
 From the repo root on the Jenkins host:
 
 ```bash
+git pull origin main
 docker compose -f docker-compose.jenkins.yml up -d --build
 ```
 
 **Option B — plain docker run**
 
-If Jenkins is already running, stop it first, then:
+If Jenkins is already running, stop and remove the old container first:
 
 ```bash
+docker stop jenkins && docker rm jenkins
 docker build -f Dockerfile.jenkins -t my-jenkins .
 docker run -d \
   --name jenkins \
   -p 8080:8080 -p 50000:50000 \
   -v jenkins_home:/var/jenkins_home \
   -v /var/run/docker.sock:/var/run/docker.sock \
+  --group-add $(getent group docker | cut -d: -f3) \
   my-jenkins
 ```
 
-**Important:** The host must have Docker installed. The `-v /var/run/docker.sock:/var/run/docker.sock` line is what fixes `docker: not found` / daemon access.
+**Important:**
+
+- The host must have Docker installed and running
+- `-v /var/run/docker.sock:/var/run/docker.sock` gives Jenkins access to the Docker daemon
+- `Dockerfile.jenkins` installs the `docker` CLI inside the Jenkins container
 
 ### Verify Docker from inside Jenkins
 
-Open **Manage Jenkins → Script Console** or run a test pipeline stage:
+In Jenkins, run a **Pipeline script** test or check the **Verify Docker** stage output:
 
 ```bash
 docker version
 docker info
 ```
 
-Both should succeed before you rely on the full deploy pipeline.
+Both must succeed before the full deploy pipeline will work.
 
 ## Deploy the fix to GitHub
 
-Commit and push the updated files so Jenkins picks up the new `Jenkinsfile`:
+Commit and push from your dev machine:
 
 ```bash
 git add Jenkinsfile Dockerfile.jenkins docker-compose.jenkins.yml JENKINS_DEPLOYMENT_FIX.md
-git commit -m "fix: enable Docker in Jenkins pipeline for automated deployment"
+git commit -m "fix: use shell docker commands without Docker Pipeline plugin"
 git push origin main
 ```
 
@@ -116,22 +139,30 @@ Then trigger **NPC-Kura-Fresh-Deploy** again in Jenkins.
 ## Expected pipeline flow after the fix
 
 1. **Checkout** — clone `npc-kura` from GitHub
-2. **Build Java Application** — `./mvnw clean package -DskipTests` → `target/kura-0.0.1-SNAPSHOT.jar`
-3. **Build Docker Image** — `docker build -t rahul54726/npc-kura-app:latest .`
-4. **Push to Docker Hub** — login + `docker push`
-5. **Deploy to AWS EC2** — SSH to EC2, pull image, restart `npc-kura-container` on port `8081`
+2. **Verify Docker** — confirm `docker version` and `docker info` work
+3. **Build Java Application** — `./mvnw clean package -DskipTests`
+4. **Build Docker Image** — `docker build -t rahul54726/npc-kura-app:latest .`
+5. **Push to Docker Hub** — login + `docker push`
+6. **Deploy to AWS EC2** — SSH to EC2, pull image, restart `npc-kura-container` on port `8081`
 
 ## If it still fails
 
 | Symptom | Fix |
 |---------|-----|
+| `Invalid agent type "docker"` | Pull latest `Jenkinsfile` from GitHub (current version does not use docker agent) |
+| `docker CLI not found` | Rebuild Jenkins with `Dockerfile.jenkins` (see setup steps above) |
 | `Cannot connect to the Docker daemon` | Mount `/var/run/docker.sock` when starting Jenkins; ensure Docker is running on the host |
-| `docker:24-cli` pull errors | Jenkins agent needs outbound internet, or pre-pull `docker pull docker:24-cli` on the host |
+| `permission denied` on docker.sock | Add `jenkins` user to `docker` group (`Dockerfile.jenkins` does this) or use `--group-add` on `docker run` |
 | `credentialsId dockerhub-creds not found` | Create the credential in Jenkins with that exact ID |
 | `ec2-ssh-key not found` | Add EC2 SSH private key credential with that exact ID |
-| EC2 deploy fails on `docker login` | Confirm EC2 has Docker installed and the `ubuntu` user can `sudo docker` |
-| App starts but errors on DB | `application.yaml` points at `localhost:5432`; EC2 needs PostgreSQL reachable from the container (separate infra task) |
+| EC2 deploy fails on `docker login` | Confirm EC2 has Docker installed and `ubuntu` can `sudo docker` |
+| App starts but errors on DB | `application.yaml` points at `localhost:5432`; EC2 needs PostgreSQL reachable from the container |
 
 ## Summary
 
-The failure was **not** a Maven or Spring Boot problem. Jenkins needed **Docker CLI access** and **Docker socket access** on the server. The updated `Jenkinsfile` runs Docker commands in a `docker:24-cli` agent with the socket mounted, and `docker-compose.jenkins.yml` documents how to run Jenkins with the socket attached permanently.
+Two separate issues were fixed:
+
+1. **`docker: not found`** — Jenkins container needs Docker CLI (`Dockerfile.jenkins`) and the host socket mounted (`docker-compose.jenkins.yml`).
+2. **`Invalid agent type "docker"`** — Removed dependency on the Docker Pipeline plugin; the pipeline now uses `agent any` and shell `docker` commands.
+
+Push the updated files, rebuild/restart Jenkins with the socket mount, then re-run the job.
