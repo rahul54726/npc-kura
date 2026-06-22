@@ -3,13 +3,16 @@ pipeline {
 
     environment {
         APP_NAME = "npc-kura"
-        // Replace with your actual Docker Hub username
+        // Docker Hub credentials and image configuration
         DOCKER_HUB_USER = "rahul54726"
         DOCKER_IMAGE = "${DOCKER_HUB_USER}/npc-kura-app:latest"
 
         // AWS EC2 configuration
         EC2_IP = "65.2.149.188"
         EC2_USER = "ubuntu"
+
+        // Absolute path to the Docker executable to resolve 'command not found' path issues in Jenkins
+        DOCKER_CMD = "/usr/bin/docker"
     }
 
     stages {
@@ -25,7 +28,7 @@ pipeline {
                 echo 'Building Spring Boot JAR using Maven Wrapper...'
                 // Ensure the Maven wrapper has execution permissions
                 sh 'chmod +x mvnw'
-                // Package the application while skipping tests to speed up the build
+                // Package the application while skipping tests to speed up the build process
                 sh './mvnw clean package -DskipTests'
             }
         }
@@ -33,17 +36,18 @@ pipeline {
         stage('Build Docker Image') {
             steps {
                 echo 'Building Docker Image from Dockerfile...'
-                sh "docker build -t ${DOCKER_IMAGE} ."
+                // Use the absolute path for the Docker command to bypass environment variable constraints
+                sh "${DOCKER_CMD} build -t ${DOCKER_IMAGE} ."
             }
         }
 
         stage('Push to Docker Hub') {
             steps {
                 echo 'Logging into Docker Hub and pushing the image...'
-                // Authenticate and push using Jenkins credentials vault
+                // Authenticate and push using the Jenkins credentials vault securely
                 withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', passwordVariable: 'DOCKER_PASS', usernameVariable: 'DOCKER_USER')]) {
-                    sh "echo \$DOCKER_PASS | docker login -u \$DOCKER_USER --password-stdin"
-                    sh "docker push ${DOCKER_IMAGE}"
+                    sh "echo \$DOCKER_PASS | ${DOCKER_CMD} login -u \$DOCKER_USER --password-stdin"
+                    sh "${DOCKER_CMD} push ${DOCKER_IMAGE}"
                 }
             }
         }
@@ -53,13 +57,14 @@ pipeline {
                 echo 'Connecting to EC2 via SSH and deploying the new container...'
                 // Securely connect to the EC2 instance using the SSH Agent plugin
                 sshagent(['ec2-ssh-key']) {
+                    // Execute deployment commands on the remote EC2 instance using elevated privileges (sudo)
                     sh """
                     ssh -o StrictHostKeyChecking=no ${EC2_USER}@${EC2_IP} "
-                        docker login -u \$DOCKER_USER -p \$DOCKER_PASS &&
-                        docker pull ${DOCKER_IMAGE} &&
-                        docker stop npc-kura-container || true &&
-                        docker rm npc-kura-container || true &&
-                        docker run -d -p 8081:8081 --name npc-kura-container ${DOCKER_IMAGE}
+                        sudo docker login -u \$DOCKER_USER -p \$DOCKER_PASS &&
+                        sudo docker pull ${DOCKER_IMAGE} &&
+                        sudo docker stop npc-kura-container || true &&
+                        sudo docker rm npc-kura-container || true &&
+                        sudo docker run -d -p 8081:8081 --name npc-kura-container ${DOCKER_IMAGE}
                     "
                     """
                 }
@@ -77,8 +82,8 @@ pipeline {
         always {
             echo 'Cleaning up the Jenkins workspace to free up disk space...'
             cleanWs()
-            // Logout from Docker to ensure credential security
-            sh 'docker logout || true'
+            // Logout from Docker to ensure credential security on the build node
+            sh "${DOCKER_CMD} logout || true"
         }
     }
 }
