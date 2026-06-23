@@ -5,7 +5,8 @@ pipeline {
         APP_NAME = "npc-kura"
         DOCKER_HUB_USER = "rahul54726"
         DOCKER_IMAGE = "${DOCKER_HUB_USER}/npc-kura-app:latest"
-        EC2_IP = "13.201.39.84"
+        // Updated to your new EC2 IP
+        EC2_IP = "13.201.62.79"
         EC2_USER = "ubuntu"
         REMOTE_DIR = "/home/ubuntu/npc-kura-deploy"
     }
@@ -13,43 +14,43 @@ pipeline {
     stages {
         stage('Checkout Source Code') {
             steps {
-                echo 'Pulling latest code from the Git branch...'
+                echo 'Pulling latest code from the Git repository...'
                 checkout scm
             }
         }
 
-        stage('Build Java Application') {
+        stage('Test & Build Java Application') {
             steps {
-                echo 'Building Spring Boot JAR using Maven Wrapper...'
+                echo 'Executing Mockito unit tests and packaging the Spring Boot application...'
                 sh 'chmod +x mvnw'
-                sh './mvnw clean package -DskipTests'
+                // Pipeline will strictly abort here if any JUnit/Mockito test fails
+                sh './mvnw clean package'
             }
         }
 
         stage('Deploy to AWS EC2') {
             steps {
-                echo 'Copying JAR to EC2 and building/running the container there (Docker runs on EC2, not Jenkins)...'
+                echo 'Tests passed successfully. Proceeding with deployment to EC2 instance...'
                 sshagent(['ec2-ssh-key']) {
                     sh """
                         set -e
                         JAR_FILE=\$(ls target/kura-*.jar | head -1)
                         SSH_OPTS="-o StrictHostKeyChecking=no"
 
-                        # Ensure remote directory exists on the EC2 instance
+                        # Ensure remote directory exists
                         ssh \$SSH_OPTS ${EC2_USER}@${EC2_IP} "mkdir -p ${REMOTE_DIR}"
 
-                        # Copy the compiled JAR and Dockerfile.runtime to the EC2 instance
+                        # Transfer JAR and Dockerfile to EC2
                         cat "\$JAR_FILE" | ssh \$SSH_OPTS ${EC2_USER}@${EC2_IP} "cat > ${REMOTE_DIR}/app.jar"
                         cat Dockerfile.runtime | ssh \$SSH_OPTS ${EC2_USER}@${EC2_IP} "cat > ${REMOTE_DIR}/Dockerfile"
 
-                        # Build the image and run the container on EC2
+                        # Execute Docker build and run commands on the EC2 instance
                         ssh \$SSH_OPTS ${EC2_USER}@${EC2_IP} "
                             cd ${REMOTE_DIR} &&
                             sudo docker build -t ${DOCKER_IMAGE} . &&
                             sudo docker stop npc-kura-container || true &&
                             sudo docker rm npc-kura-container || true &&
 
-                            # Deploy container within the custom network and inject PostgreSQL credentials
                             sudo docker run -d -p 8081:8081 --name npc-kura-container \\
                             --network kura-net \\
                             -e SPRING_DATASOURCE_URL='jdbc:postgresql://kura-postgres:5432/npc_kura?options=-c%20timezone=Asia/Kolkata' \\
@@ -64,7 +65,7 @@ pipeline {
 
         stage('Push to Docker Hub') {
             steps {
-                echo 'Pushing image to Docker Hub from EC2...'
+                echo 'Deployment successful. Pushing the new image to Docker Hub registry...'
                 withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', passwordVariable: 'DOCKER_PASS', usernameVariable: 'DOCKER_USER')]) {
                     sshagent(['ec2-ssh-key']) {
                         sh """
@@ -81,13 +82,13 @@ pipeline {
 
     post {
         success {
-            echo 'Pipeline executed successfully. The application is now live on the EC2 instance.'
+            echo 'Pipeline completed successfully. The application has been tested and deployed to production.'
         }
         failure {
-            echo 'Pipeline failed. Please review the Jenkins console logs for debugging details.'
+            echo 'Pipeline failed during execution. Please review the build logs for specific test failures or deployment errors.'
         }
         always {
-            echo 'Cleaning up the Jenkins workspace to free up disk space...'
+            echo 'Cleaning up the Jenkins workspace...'
             cleanWs()
         }
     }
