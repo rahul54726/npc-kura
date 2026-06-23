@@ -35,16 +35,27 @@ pipeline {
                         JAR_FILE=\$(ls target/kura-*.jar | head -1)
                         SSH_OPTS="-o StrictHostKeyChecking=no"
 
+                        # Ensure remote directory exists on the EC2 instance
                         ssh \$SSH_OPTS ${EC2_USER}@${EC2_IP} "mkdir -p ${REMOTE_DIR}"
+
+                        # Copy the compiled JAR and Dockerfile.runtime to the EC2 instance
                         cat "\$JAR_FILE" | ssh \$SSH_OPTS ${EC2_USER}@${EC2_IP} "cat > ${REMOTE_DIR}/app.jar"
                         cat Dockerfile.runtime | ssh \$SSH_OPTS ${EC2_USER}@${EC2_IP} "cat > ${REMOTE_DIR}/Dockerfile"
 
+                        # Build the image and run the container on EC2
                         ssh \$SSH_OPTS ${EC2_USER}@${EC2_IP} "
                             cd ${REMOTE_DIR} &&
                             sudo docker build -t ${DOCKER_IMAGE} . &&
                             sudo docker stop npc-kura-container || true &&
                             sudo docker rm npc-kura-container || true &&
-                            sudo docker run -d -p 8081:8081 --name npc-kura-container ${DOCKER_IMAGE}
+
+                            # Deploy container within the custom network and inject PostgreSQL credentials
+                            sudo docker run -d -p 8081:8081 --name npc-kura-container \\
+                            --network kura-net \\
+                            -e SPRING_DATASOURCE_URL='jdbc:postgresql://kura-postgres:5432/npc_kura?options=-c%20timezone=Asia/Kolkata' \\
+                            -e SPRING_DATASOURCE_USERNAME=postgres \\
+                            -e SPRING_DATASOURCE_PASSWORD=rahul23246 \\
+                            ${DOCKER_IMAGE}
                         "
                     """
                 }
