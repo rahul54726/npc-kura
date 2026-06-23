@@ -5,7 +5,7 @@ pipeline {
         APP_NAME = "npc-kura"
         DOCKER_HUB_USER = "rahul54726"
         DOCKER_IMAGE = "${DOCKER_HUB_USER}/npc-kura-app:latest"
-        EC2_IP = "65.2.149.188"
+        EC2_IP = "13.201.39.84"
         EC2_USER = "ubuntu"
         REMOTE_DIR = "/home/ubuntu/npc-kura-deploy"
     }
