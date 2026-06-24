@@ -5,7 +5,6 @@ pipeline {
         APP_NAME = "npc-kura"
         DOCKER_HUB_USER = "rahul54726"
         DOCKER_IMAGE = "${DOCKER_HUB_USER}/npc-kura-app:latest"
-        // Updated to your new EC2 IP
         EC2_IP = "13.201.62.79"
         EC2_USER = "ubuntu"
         REMOTE_DIR = "/home/ubuntu/npc-kura-deploy"
@@ -31,34 +30,39 @@ pipeline {
         stage('Deploy to AWS EC2') {
             steps {
                 echo 'Tests passed successfully. Proceeding with deployment to EC2 instance...'
-                sshagent(['ec2-ssh-key']) {
-                    sh """
-                        set -e
-                        JAR_FILE=\$(ls target/kura-*.jar | head -1)
-                        SSH_OPTS="-o StrictHostKeyChecking=no"
+                withCredentials([
+                    string(credentialsId: 'kura-datasource-url', variable: 'DB_URL'),
+                    usernamePassword(credentialsId: 'kura-db-creds', usernameVariable: 'DB_USER', passwordVariable: 'DB_PASS')
+                ]) {
+                    sshagent(['ec2-ssh-key']) {
+                        sh """
+                            set -e
+                            JAR_FILE=\$(ls target/kura-*.jar | head -1)
+                            SSH_OPTS="-o StrictHostKeyChecking=no"
 
-                        # Ensure remote directory exists
-                        ssh \$SSH_OPTS ${EC2_USER}@${EC2_IP} "mkdir -p ${REMOTE_DIR}"
+                            # Ensure remote directory exists
+                            ssh \$SSH_OPTS ${EC2_USER}@${EC2_IP} "mkdir -p ${REMOTE_DIR}"
 
-                        # Transfer JAR and Dockerfile to EC2
-                        cat "\$JAR_FILE" | ssh \$SSH_OPTS ${EC2_USER}@${EC2_IP} "cat > ${REMOTE_DIR}/app.jar"
-                        cat Dockerfile.runtime | ssh \$SSH_OPTS ${EC2_USER}@${EC2_IP} "cat > ${REMOTE_DIR}/Dockerfile"
+                            # Transfer JAR and Dockerfile to EC2
+                            cat "\$JAR_FILE" | ssh \$SSH_OPTS ${EC2_USER}@${EC2_IP} "cat > ${REMOTE_DIR}/app.jar"
+                            cat Dockerfile.runtime | ssh \$SSH_OPTS ${EC2_USER}@${EC2_IP} "cat > ${REMOTE_DIR}/Dockerfile"
 
-                        # Execute Docker build and run commands on the EC2 instance
-                        ssh \$SSH_OPTS ${EC2_USER}@${EC2_IP} "
-                            cd ${REMOTE_DIR} &&
-                            sudo docker build -t ${DOCKER_IMAGE} . &&
-                            sudo docker stop npc-kura-container || true &&
-                            sudo docker rm npc-kura-container || true &&
+                            # Execute Docker build and run commands on the EC2 instance
+                            ssh \$SSH_OPTS ${EC2_USER}@${EC2_IP} "
+                                cd ${REMOTE_DIR} &&
+                                sudo docker build -t ${DOCKER_IMAGE} . &&
+                                sudo docker stop npc-kura-container || true &&
+                                sudo docker rm npc-kura-container || true &&
 
-                            sudo docker run -d -p 8081:8081 --name npc-kura-container \\
-                            --network kura-net \\
-                            -e SPRING_DATASOURCE_URL='jdbc:postgresql://kura-postgres:5432/npc_kura?options=-c%20timezone=Asia/Kolkata' \\
-                            -e SPRING_DATASOURCE_USERNAME=postgres \\
-                            -e SPRING_DATASOURCE_PASSWORD=rahul23246 \\
-                            ${DOCKER_IMAGE}
-                        "
-                    """
+                                sudo docker run -d -p 8081:8081 --name npc-kura-container \\
+                                --network kura-net \\
+                                -e SPRING_DATASOURCE_URL='${DB_URL}' \\
+                                -e SPRING_DATASOURCE_USERNAME='${DB_USER}' \\
+                                -e SPRING_DATASOURCE_PASSWORD='${DB_PASS}' \\
+                                ${DOCKER_IMAGE}
+                            "
+                        """
+                    }
                 }
             }
         }

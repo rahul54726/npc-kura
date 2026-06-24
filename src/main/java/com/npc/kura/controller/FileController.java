@@ -1,14 +1,18 @@
 package com.npc.kura.controller;
 
 import com.npc.kura.dto.ChunkUploadResponse;
+import com.npc.kura.dto.FileCompleteRequest;
 import com.npc.kura.dto.FileCompleteResponse;
 import com.npc.kura.dto.FileInitiateRequest;
 import com.npc.kura.dto.FileInitiateResponse;
 import com.npc.kura.service.FileStorageService;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.Pattern;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -19,6 +23,7 @@ import org.springframework.web.multipart.MultipartFile;
 @RestController
 @RequestMapping("/api/v1/files")
 @RequiredArgsConstructor
+@Validated
 public class FileController {
 
     private final FileStorageService fileStorageService;
@@ -29,14 +34,9 @@ public class FileController {
      * @return ResponseEntity containing the generated unique file ID.
      */
     @PostMapping("/initiate")
-    public ResponseEntity<?> initiateUpload(@Valid @RequestBody FileInitiateRequest request) {
-        try {
-            FileInitiateResponse response = fileStorageService.initiateUpload(request);
-            return ResponseEntity.status(HttpStatus.CREATED).body(response);
-        } catch (Exception e) {
-            // In a strict production environment, this would be handled by a @ControllerAdvice GlobalExceptionHandler
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Initialization failed: " + e.getMessage());
-        }
+    public ResponseEntity<FileInitiateResponse> initiateUpload(@Valid @RequestBody FileInitiateRequest request) {
+        FileInitiateResponse response = fileStorageService.initiateUpload(request);
+        return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
     /**
@@ -47,16 +47,15 @@ public class FileController {
      * @return ResponseEntity confirming the successful storage of the chunk.
      */
     @PostMapping("/{fileId}/chunk")
-    public ResponseEntity<?> uploadChunk(
+    public ResponseEntity<ChunkUploadResponse> uploadChunk(
             @PathVariable String fileId,
-            @RequestParam("sequenceNumber") int sequenceNumber,
+            @RequestParam("sequenceNumber") @Min(value = 1, message = "sequenceNumber must be greater than or equal to 1") int sequenceNumber,
+            @RequestParam("chunkChecksum")
+            @Pattern(regexp = "^[a-fA-F0-9]{64}$", message = "chunkChecksum must be a valid SHA-256 hex string")
+            String chunkChecksum,
             @RequestParam("chunk") MultipartFile chunk) {
-        try {
-            ChunkUploadResponse response = fileStorageService.uploadChunk(fileId, sequenceNumber, chunk);
-            return ResponseEntity.ok(response);
-        } catch (Exception e) {
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("Chunk upload failed: " + e.getMessage());
-        }
+        ChunkUploadResponse response = fileStorageService.uploadChunk(fileId, sequenceNumber, chunkChecksum, chunk);
+        return ResponseEntity.ok(response);
     }
 
     /**
@@ -65,12 +64,11 @@ public class FileController {
      * @return ResponseEntity containing the final storage path and status.
      */
     @PostMapping("/{fileId}/complete")
-    public ResponseEntity<?> completeUpload(@PathVariable String fileId) {
-        try {
-            FileCompleteResponse response = fileStorageService.completeUpload(fileId);
-            return ResponseEntity.ok(response);
-        } catch (Exception e) {
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("File completion failed: " + e.getMessage());
-        }
+    public ResponseEntity<FileCompleteResponse> completeUpload(
+            @PathVariable String fileId,
+            @Valid @RequestBody FileCompleteRequest request
+    ) {
+        FileCompleteResponse response = fileStorageService.completeUpload(fileId, request.finalChecksum());
+        return ResponseEntity.ok(response);
     }
 }

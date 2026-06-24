@@ -62,6 +62,8 @@ This avoids needing Docker on Jenkins entirely.
 | ID | Type | Used for |
 |----|------|----------|
 | `ec2-ssh-key` | SSH Username with private key | Copy JAR to EC2 and run Docker commands |
+| `kura-datasource-url` | Secret text | Runtime value for `SPRING_DATASOURCE_URL` |
+| `kura-db-creds` | Username with password | Runtime values for `SPRING_DATASOURCE_USERNAME` and `SPRING_DATASOURCE_PASSWORD` |
 | `dockerhub-creds` | Username with password | Push image to Docker Hub from EC2 (optional stage) |
 
 ### EC2 prerequisites
@@ -90,6 +92,7 @@ Then re-run **NPC-Kura-Fresh-Deploy** in Jenkins.
    - Copy `target/kura-*.jar` → EC2 as `app.jar`
    - Copy `Dockerfile.runtime` → EC2 as `Dockerfile`
    - `sudo docker build -t rahul54726/npc-kura-app:latest .`
+   - Inject datasource env values from Jenkins credentials (`kura-datasource-url`, `kura-db-creds`)
    - Stop/remove old container, start new one on port `8081`
 4. **Push to Docker Hub** — login and push from EC2
 
@@ -98,12 +101,13 @@ Then re-run **NPC-Kura-Fresh-Deploy** in Jenkins.
 | Symptom | Fix |
 |---------|-----|
 | `ec2-ssh-key not found` | Add SSH private key credential in Jenkins with that exact ID |
+| `kura-datasource-url` or `kura-db-creds` not found | Add both credentials in Jenkins with exact IDs |
 | `Permission denied (publickey)` | EC2 key pair must match the `ec2-ssh-key` credential |
 | `sudo: docker: command not found` on EC2 | Install Docker on EC2: `sudo apt install docker.io` |
 | `docker build` fails on EC2 | SSH to EC2 and run `sudo docker build` manually in `/home/ubuntu/npc-kura-deploy` |
 | `credentialsId dockerhub-creds not found` | Create Docker Hub credential, or mark Push stage optional |
 | App container exits immediately | Check logs: `sudo docker logs npc-kura-container` |
-| App starts but DB errors | `application.yaml` uses `localhost:5432`; PostgreSQL must be reachable from the container on EC2 |
+| App starts but DB errors | Verify `kura-datasource-url` points to a DB reachable from EC2 container network |
 
 ## Optional — Docker on Jenkins (not required)
 

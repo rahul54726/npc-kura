@@ -7,4 +7,5 @@ import java.util.List;
 
 public interface FileChunkRepository extends JpaRepository<FileChunk , Long> {
     List<FileChunk> findByFileMetadataIdOrderBySequenceNumberAsc(String fileMetadataId);
+    boolean existsByFileMetadataIdAndSequenceNumber(String fileMetadataId, int sequenceNumber);
 }

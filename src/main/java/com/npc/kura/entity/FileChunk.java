@@ -5,7 +5,10 @@ import jakarta.persistence.*;
 import lombok.*;
 
 @Entity
-@Table(name = "file_chunks")
+@Table(
+        name = "file_chunks",
+        uniqueConstraints = @UniqueConstraint(columnNames = {"file_id", "sequence_number"})
+)
 @Getter
 @Setter
 @NoArgsConstructor
@@ -21,7 +24,10 @@ public class FileChunk {
     @JoinColumn(name = "file_id",nullable = false)
     @JsonIgnore
     private FileMetadata fileMetadata;
+    @Column(name = "sequence_number")
     private int sequenceNumber;
     private String storegePath;
-    private  long chunkSize;
+    private long chunkSize;
+    @Column(name = "sha256_checksum", nullable = false, length = 64)
+    private String sha256Checksum;
 }
